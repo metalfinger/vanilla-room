@@ -89,6 +89,8 @@ pub fn build_user_prompt(
     transcript: &str,
     state: &ProjectState,
     decisions: &[String],
+    diff: Option<&str>,
+    step_instruction: Option<&str>,
 ) -> String {
     let decisions_str = if decisions.is_empty() {
         "None yet".to_string()
@@ -131,6 +133,16 @@ pub fn build_user_prompt(
         parts.join(" ")
     };
 
+    let diff_section = match diff {
+        Some(d) if !d.trim().is_empty() => format!("CODE CHANGES (git diff)\n```\n{}\n```", d),
+        _ => String::new(),
+    };
+
+    let task_section = match step_instruction {
+        Some(instr) => format!("\nYOUR TASK THIS TURN\n{}\n", instr),
+        None => String::new(),
+    };
+
     format!(
         "PROJECT BRIEF\n\
          {brief}\n\
@@ -141,18 +153,21 @@ pub fn build_user_prompt(
          CURRENT ARTIFACTS\n\
          {artifacts}\n\
          \n\
+         {diff_section}\n\
          CURRENT APPROVALS\n\
          {approvals}\n\
          \n\
          DECISIONS SO FAR\n\
          {decisions}\n\
-         \n\
+         {task_section}\n\
          YOUR TURN. Respond naturally.",
         brief = brief,
         transcript = transcript,
         artifacts = artifacts_str,
+        diff_section = diff_section,
         approvals = approvals_str,
         decisions = decisions_str,
+        task_section = task_section,
     )
 }
 
@@ -163,9 +178,11 @@ pub fn build_full_prompt(
     state: &ProjectState,
     playbook: &Playbook,
     decisions: &[String],
+    diff: Option<&str>,
+    step_instruction: Option<&str>,
 ) -> (String, String) {
     let system = build_system_prompt(agent, state, playbook);
-    let user = build_user_prompt(brief, transcript, state, decisions);
+    let user = build_user_prompt(brief, transcript, state, decisions, diff, step_instruction);
     (system, user)
 }
 
@@ -274,7 +291,7 @@ mod tests {
     fn user_prompt_structure() {
         let state = make_state();
         let decisions = vec!["Use tokio".to_string(), "Use serde".to_string()];
-        let prompt = build_user_prompt("Build a CLI tool", "Alice: hello", &state, &decisions);
+        let prompt = build_user_prompt("Build a CLI tool", "Alice: hello", &state, &decisions, None, None);
         assert!(prompt.contains("PROJECT BRIEF"));
         assert!(prompt.contains("Build a CLI tool"));
         assert!(prompt.contains("TRANSCRIPT"));
@@ -288,7 +305,7 @@ mod tests {
     #[test]
     fn user_prompt_no_decisions() {
         let state = make_state();
-        let prompt = build_user_prompt("Brief", "Transcript", &state, &[]);
+        let prompt = build_user_prompt("Brief", "Transcript", &state, &[], None, None);
         assert!(prompt.contains("None yet"));
     }
 
@@ -298,7 +315,7 @@ mod tests {
         let state = make_state();
         let playbook = make_playbook();
         let decisions = vec!["Decision 1".to_string()];
-        let (sys, usr) = build_full_prompt(&agent, "Brief", "Transcript", &state, &playbook, &decisions);
+        let (sys, usr) = build_full_prompt(&agent, "Brief", "Transcript", &state, &playbook, &decisions, None, None);
         assert!(!sys.is_empty());
         assert!(!usr.is_empty());
         assert!(sys.contains("You are Alice"));
@@ -325,5 +342,23 @@ mod tests {
         let prompt = build_system_prompt(&agent, &state, &playbook);
         assert!(prompt.contains("Charlie✗"));
         assert!(prompt.contains("Dave✗"));
+    }
+
+    #[test]
+    fn user_prompt_includes_diff_and_instruction() {
+        let state = make_state();
+        let prompt = build_user_prompt("Brief", "Transcript", &state, &[], Some("diff --git a/foo.rs"), Some("Review the code changes for bugs"));
+        assert!(prompt.contains("CODE CHANGES"));
+        assert!(prompt.contains("diff --git a/foo.rs"));
+        assert!(prompt.contains("YOUR TASK THIS TURN"));
+        assert!(prompt.contains("Review the code changes for bugs"));
+    }
+
+    #[test]
+    fn user_prompt_omits_empty_diff() {
+        let state = make_state();
+        let prompt = build_user_prompt("Brief", "Transcript", &state, &[], None, None);
+        assert!(!prompt.contains("CODE CHANGES"));
+        assert!(!prompt.contains("YOUR TASK THIS TURN"));
     }
 }

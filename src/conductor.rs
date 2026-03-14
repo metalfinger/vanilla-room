@@ -151,18 +151,27 @@ impl Conductor {
                         self.rotate_to_back(&name);
                         return Some(name);
                     }
+                } else if role.to_lowercase() == "conductor" {
+                    // Conductor step — return "Conductor" to trigger auto-advance
+                    return Some("Conductor".to_string());
                 } else {
-                    // Find an agent with the matching role
+                    // Find an agent with the matching name (or role as fallback)
                     let pick = self
                         .roster
                         .0
                         .iter()
-                        .find(|a| a.role == role)
+                        .find(|a| a.name == role || a.role.to_lowercase().contains(&role.to_lowercase()))
                         .map(|a| a.name.clone());
                     if let Some(ref name) = pick {
                         self.rotate_to_back(name);
                         return pick;
                     }
+                    // Required role not on team — auto-advance past this step
+                    if let Some(ref step_id) = self.state.data.current_step_id.clone() {
+                        let _ = self.advance_step(step_id);
+                    }
+                    // Re-enter pick_next with updated step
+                    return self.queue.front().cloned();
                 }
             }
         }
@@ -203,6 +212,15 @@ impl Conductor {
     pub fn process_turn(&mut self, agent_name: &str) -> io::Result<TurnResult> {
         self.turn_count += 1;
 
+        // Handle "Conductor" step — auto-advance, don't run as AI agent
+        if agent_name == "Conductor" || agent_name == "conductor" {
+            self.post_conductor_message("Finalizing — merging work and completing.")?;
+            if let Some(ref step_id) = self.state.data.current_step_id.clone() {
+                self.advance_step(step_id)?;
+            }
+            return Ok(TurnResult::Paused); // pause for user approval of final merge
+        }
+
         // 1. Find agent profile from roster
         let agent = match self.roster.0.iter().find(|a| a.name == agent_name) {
             Some(a) => a.clone(),
@@ -211,10 +229,16 @@ impl Conductor {
                 match persona::load_persona(&self.personas_dir, agent_name) {
                     Ok(a) => a,
                     Err(e) => {
-                        return Ok(TurnResult::Error(format!(
-                            "Agent '{}' not found: {}",
-                            agent_name, e
-                        )));
+                        // If agent not found, skip this step and advance
+                        let msg = format!(
+                            "Skipping step — agent '{}' not on team. Advancing.",
+                            agent_name
+                        );
+                        self.post_conductor_message(&msg)?;
+                        if let Some(ref step_id) = self.state.data.current_step_id.clone() {
+                            self.advance_step(step_id)?;
+                        }
+                        return Ok(TurnResult::Continue);
                     }
                 }
             }
@@ -243,6 +267,8 @@ impl Conductor {
             &self.state.data,
             &self.playbook,
             &self.state.data.decision_log,
+            None,
+            None,
         );
 
         // 5. Checkout agent branch
@@ -285,9 +311,11 @@ impl Conductor {
             self.state.record_vote(&agent.name, vote.clone())?;
         }
 
-        // Process handoffs
+        // Process handoffs (filter out "Conductor" — it's not an AI agent)
         for target in &parsed.handoff_targets {
-            self.pending_handoffs.push(target.clone());
+            if target.to_lowercase() != "conductor" {
+                self.pending_handoffs.push(target.clone());
+            }
         }
 
         // Record decisions
@@ -530,15 +558,15 @@ impl Conductor {
         let gate = match step.gate.as_deref() {
             Some(g) => g,
             None => {
-                // No gate — auto-advance when the required artifact is produced
-                // or when the assigned role has taken their turn
-                if let Some(ref artifact) = step.output_artifact {
-                    if self.state.data.artifacts.contains_key(artifact) {
-                        return self.advance_step(&step_id);
-                    }
-                } else {
-                    // No gate and no artifact requirement — advance after the
-                    // required role has spoken (current turn just completed)
+                // No gate — auto-advance when the required role has completed
+                // their turn. The agent did the work (code is on their branch).
+                let role = &step.required_role;
+                let role_spoke = self.last_speaker.as_ref()
+                    .map(|s| {
+                        self.roster.0.iter().any(|a| &a.name == s && (a.name == *role || a.role.to_lowercase().contains(&role.to_lowercase())))
+                    })
+                    .unwrap_or(false);
+                if role_spoke || role == "ALL" {
                     return self.advance_step(&step_id);
                 }
                 return Ok(None);
