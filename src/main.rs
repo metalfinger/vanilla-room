@@ -119,7 +119,7 @@ fn find_resource_dir(name: &str) -> PathBuf {
 }
 
 fn vr_dir(repo: &Path) -> PathBuf {
-    repo.join(".vanilla-room")
+    repo.join(".git").join("vanilla-room")
 }
 
 fn require_vr_dir(repo: &Path) -> PathBuf {
@@ -191,21 +191,6 @@ fn cmd_init(task: String, repo_arg: Option<PathBuf>, playbook_override: Option<S
         eprintln!("Error: Could not create .vanilla-room/: {}", e);
         process::exit(1);
     });
-
-    // Ensure .vanilla-room/ is gitignored (runtime files, not code)
-    let gitignore_path = repo.join(".gitignore");
-    let gitignore_content = fs::read_to_string(&gitignore_path).unwrap_or_default();
-    if !gitignore_content.contains(".vanilla-room") {
-        use std::io::Write;
-        let mut f = fs::OpenOptions::new().create(true).append(true).open(&gitignore_path).unwrap();
-        if !gitignore_content.is_empty() && !gitignore_content.ends_with('\n') {
-            let _ = writeln!(f);
-        }
-        let _ = writeln!(f, ".vanilla-room/");
-        // Commit the gitignore change so it's on all branches
-        let _ = std::process::Command::new("git").args(["add", ".gitignore"]).current_dir(&repo).output();
-        let _ = std::process::Command::new("git").args(["commit", "-m", "chore: gitignore .vanilla-room/"]).current_dir(&repo).output();
-    }
 
     // Save brief
     fs::write(vr.join("brief.md"), &task).unwrap_or_else(|e| {

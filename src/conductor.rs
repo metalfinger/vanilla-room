@@ -426,8 +426,6 @@ impl Conductor {
 
     /// Main orchestration loop.
     pub fn run(&mut self) -> io::Result<TurnResult> {
-        // Ensure .vanilla-room/ runtime files aren't tracked by git
-        self.git.untrack_runtime_files();
         self.post_conductor_message("Room started. Let's begin.")?;
         self.run_loop()
     }
