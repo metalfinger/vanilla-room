@@ -1,5 +1,6 @@
 mod types;
 pub mod agent;
+pub mod conductor;
 pub mod context;
 pub mod discussion;
 pub mod git_workspace;
