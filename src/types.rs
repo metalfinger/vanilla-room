@@ -163,6 +163,8 @@ pub struct RoomConfig {
     pub project_dir: PathBuf,
     pub repo_dir: PathBuf,
     pub session_id: String,
+    #[serde(default)]
+    pub original_branch: String,
 }
 
 // ---------------------------------------------------------------------------

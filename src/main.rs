@@ -183,6 +183,10 @@ fn cmd_init(task: String, repo_arg: Option<PathBuf>, playbook_override: Option<S
     let playbooks_dir = find_resource_dir("playbooks");
 
     let vr = vr_dir(&repo);
+    if vr.is_dir() {
+        eprintln!("Error: Session already exists. Run 'vanilla-room cleanup' first.");
+        process::exit(1);
+    }
     fs::create_dir_all(&vr).unwrap_or_else(|e| {
         eprintln!("Error: Could not create .vanilla-room/: {}", e);
         process::exit(1);
@@ -235,11 +239,25 @@ fn cmd_init(task: String, repo_arg: Option<PathBuf>, playbook_override: Option<S
     // Generate session ID
     let session_id = Uuid::new_v4().to_string();
 
+    // Capture original branch
+    let original_branch = {
+        let output = std::process::Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(&repo)
+            .output()
+            .unwrap_or_else(|e| {
+                eprintln!("Error: git not found: {}", e);
+                process::exit(1);
+            });
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    };
+
     // Save config
     let config = RoomConfig {
         project_dir: repo.clone(),
         repo_dir: repo.clone(),
         session_id: session_id.clone(),
+        original_branch: original_branch.clone(),
     };
     let config_json = serde_json::to_string_pretty(&config).unwrap();
     fs::write(vr.join("config.json"), &config_json).unwrap_or_else(|e| {
@@ -319,6 +337,15 @@ fn cmd_run() {
             process::exit(1);
         })
     };
+
+    let state = State::new(vr.join("state.json")).unwrap_or_else(|e| {
+        eprintln!("Error: Could not load state: {}", e);
+        process::exit(1);
+    });
+    if state.data.phase == Phase::Complete {
+        println!("Session already complete. Run 'vanilla-room cleanup' to start fresh.");
+        return;
+    }
 
     let roster = load_roster(&vr);
     let pb = load_playbook_from_vr(&vr);
@@ -570,6 +597,21 @@ fn cmd_recruit(agent_name: String) {
         eprintln!("Error: Could not write roster.json: {}", e);
         process::exit(1);
     });
+
+    // Create git branch for new agent
+    let session_id = load_session_id(&vr);
+    let config_path = vr.join("config.json");
+    if let Ok(contents) = fs::read_to_string(&config_path) {
+        if let Ok(config) = serde_json::from_str::<RoomConfig>(&contents) {
+            let orig = if config.original_branch.is_empty() {
+                "main".to_string()
+            } else {
+                config.original_branch
+            };
+            let git = GitWorkspace::new_with_original(repo.clone(), &session_id, orig);
+            let _ = git.ensure_agent_branch(&profile.name);
+        }
+    }
 
     println!("Recruited {} ({}).", profile.name, profile.role);
 }
