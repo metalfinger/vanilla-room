@@ -138,6 +138,9 @@ impl Conductor {
         }
 
         // 3. Playbook requires a specific role for current step
+        //    Skip role priority when blocked — let other agents respond instead
+        let is_blocked = self.state.is_blocked();
+        if !is_blocked {
         if let Some(ref step_id) = self.state.data.current_step_id.clone() {
             if let Some(role) = pb::required_role(&self.playbook, step_id) {
                 if role == "ALL" {
@@ -179,6 +182,7 @@ impl Conductor {
                 }
             }
         }
+        } // end if !is_blocked
 
         // 4. Round-robin from queue, skip if same as last speaker
         let queue_len = self.queue.len();
@@ -368,16 +372,33 @@ impl Conductor {
         self.last_speaker = Some(agent.name.clone());
         self.save_conductor_state()?;
 
-        // Check for blocking votes
+        // Check for blocking votes — give other agents a chance to respond,
+        // but if we've been blocked too many times, pause for user
         if self.state.is_blocked() {
             let blockers: Vec<String> = self.state.data.approvals.iter()
                 .filter(|(_, v)| **v == Vote::Blocking)
                 .map(|(k, _)| k.clone())
                 .collect();
+
+            // Count consecutive blocks by checking if last N transcript entries are all from same blocker
+            let recent = self.discussion.read_last(6).unwrap_or_default();
+            let consecutive_blocks = recent.iter().rev()
+                .take_while(|e| e.status_vote == Some(Vote::Blocking) && blockers.contains(&e.agent_name))
+                .count();
+
+            if consecutive_blocks >= 3 {
+                self.post_conductor_message(&format!(
+                    "Blocked {} times by: {}. Pausing for user intervention.",
+                    consecutive_blocks, blockers.join(", ")
+                ))?;
+                self.paused = true;
+                return Ok(TurnResult::Paused);
+            }
+
             self.post_conductor_message(&format!(
-                "Blocked by: {}. Resolve before advancing.", blockers.join(", ")
+                "Blocked by: {}. Other agents will respond.", blockers.join(", ")
             ))?;
-            return if self.paused { Ok(TurnResult::Paused) } else { Ok(TurnResult::Continue) };
+            // Don't return early — let the round continue so other agents can address the block
         }
 
         // 11. Check for rejection -> start reflexion (only if not already in one)
