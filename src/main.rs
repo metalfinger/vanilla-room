@@ -6,6 +6,7 @@ pub mod git_workspace;
 pub mod parser;
 pub mod persona;
 pub mod playbook;
+pub mod recruiter;
 pub mod state;
 
 fn main() {
