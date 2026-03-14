@@ -1,4 +1,5 @@
 mod types;
+pub mod agent;
 pub mod context;
 pub mod discussion;
 pub mod git_workspace;
