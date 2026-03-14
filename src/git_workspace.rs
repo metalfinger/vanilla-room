@@ -88,7 +88,18 @@ impl GitWorkspace {
 
     pub fn checkout_agent_branch(&self, agent_name: &str) -> io::Result<()> {
         let branch = Self::agent_branch_name(agent_name);
+        // Stash any dirty files (runtime state files) before switching
+        let status = run_git(&self.repo_dir, &["status", "--porcelain"]).unwrap_or_default();
+        let stashed = if !status.is_empty() {
+            let _ = run_git(&self.repo_dir, &["stash", "push", "-m", "vr-auto-stash"]);
+            true
+        } else {
+            false
+        };
         run_git(&self.repo_dir, &["checkout", &branch])?;
+        if stashed {
+            let _ = run_git(&self.repo_dir, &["stash", "pop"]);
+        }
         Ok(())
     }
 
@@ -113,10 +124,24 @@ impl GitWorkspace {
             .unwrap_or_else(|e| format!("error getting diff: {}", e))
     }
 
+    fn force_checkout(&self, branch: &str) -> io::Result<()> {
+        let status = run_git(&self.repo_dir, &["status", "--porcelain"]).unwrap_or_default();
+        if !status.is_empty() {
+            let _ = run_git(&self.repo_dir, &["stash", "push", "-m", "vr-auto-stash"]);
+        }
+        run_git(&self.repo_dir, &["checkout", branch])?;
+        // Pop stash if it exists
+        let stash_list = run_git(&self.repo_dir, &["stash", "list"]).unwrap_or_default();
+        if stash_list.contains("vr-auto-stash") {
+            let _ = run_git(&self.repo_dir, &["stash", "pop"]);
+        }
+        Ok(())
+    }
+
     pub fn merge_agent_to_session(&self, agent_name: &str) -> io::Result<()> {
         let session_branch = self.session_branch_name();
         let agent_branch = Self::agent_branch_name(agent_name);
-        run_git(&self.repo_dir, &["checkout", &session_branch])?;
+        self.force_checkout(&session_branch)?;
         let result = run_git(
             &self.repo_dir,
             &["merge", "--no-ff", &agent_branch, "-m", &format!("merge {}", agent_branch)],
@@ -130,7 +155,7 @@ impl GitWorkspace {
 
     pub fn merge_session_to_main(&self) -> io::Result<()> {
         let session_branch = self.session_branch_name();
-        run_git(&self.repo_dir, &["checkout", &self.original_branch])?;
+        self.force_checkout(&self.original_branch)?;
         let result = run_git(
             &self.repo_dir,
             &["merge", "--no-ff", &session_branch, "-m", &format!("merge {}", session_branch)],
@@ -178,8 +203,7 @@ impl GitWorkspace {
     }
 
     pub fn restore_original_branch(&self) -> io::Result<()> {
-        run_git(&self.repo_dir, &["checkout", &self.original_branch])?;
-        Ok(())
+        self.force_checkout(&self.original_branch)
     }
 
     pub fn current_branch(&self) -> io::Result<String> {
