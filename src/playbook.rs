@@ -12,6 +12,7 @@ pub enum PlaybookError {
     Io(std::io::Error),
     Parse(toml::de::Error),
     Message(String),
+    Validation(String),
 }
 
 impl std::fmt::Display for PlaybookError {
@@ -20,6 +21,7 @@ impl std::fmt::Display for PlaybookError {
             PlaybookError::Io(e) => write!(f, "IO error: {}", e),
             PlaybookError::Parse(e) => write!(f, "TOML parse error: {}", e),
             PlaybookError::Message(s) => write!(f, "{}", s),
+            PlaybookError::Validation(s) => write!(f, "Validation error: {}", s),
         }
     }
 }
@@ -52,14 +54,41 @@ pub fn load_playbook(playbooks_dir: &Path, name: &str) -> Result<Playbook, Playb
             e
         ))
     })?;
-    let playbook: Playbook = toml::from_str(&contents).map_err(|e| {
+    let pb: Playbook = toml::from_str(&contents).map_err(|e| {
         PlaybookError::Message(format!(
             "failed to parse playbook file '{}': {}",
             path.display(),
             e
         ))
     })?;
-    Ok(playbook)
+    validate_playbook(&pb)?;
+    Ok(pb)
+}
+
+/// Validate a playbook for duplicate step IDs and broken `next` references.
+pub fn validate_playbook(pb: &Playbook) -> Result<(), PlaybookError> {
+    let ids: Vec<&str> = pb.steps.iter().map(|s| s.id.as_str()).collect();
+
+    // Check for duplicate IDs
+    let mut seen = std::collections::HashSet::new();
+    for id in &ids {
+        if !seen.insert(id) {
+            return Err(PlaybookError::Validation(format!("Duplicate step ID: {}", id)));
+        }
+    }
+
+    // Check that all `next` references point to existing step IDs
+    for step in &pb.steps {
+        if let Some(ref next) = step.next {
+            if !ids.contains(&next.as_str()) {
+                return Err(PlaybookError::Validation(format!(
+                    "Step '{}' references unknown next step '{}'", step.id, next
+                )));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Find a step by its id.
@@ -194,6 +223,70 @@ required_role = "Conductor"
         assert_eq!(required_role(&pb, "alpha").as_deref(), Some("Architect"));
         assert_eq!(required_role(&pb, "gamma").as_deref(), Some("Conductor"));
         assert!(required_role(&pb, "missing").is_none());
+    }
+
+    #[test]
+    fn rejects_duplicate_step_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dup.toml");
+        std::fs::write(&path, r#"
+name = "test"
+description = "test"
+
+[[steps]]
+id = "step1"
+description = "first"
+required_role = "Dev"
+next = "step1"
+
+[[steps]]
+id = "step1"
+description = "second duplicate"
+required_role = "Dev"
+"#).unwrap();
+        let result = load_playbook(dir.path(), "dup");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_broken_next_reference() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("broken.toml");
+        std::fs::write(&path, r#"
+name = "test"
+description = "test"
+
+[[steps]]
+id = "step1"
+description = "first"
+required_role = "Dev"
+next = "nonexistent"
+"#).unwrap();
+        let result = load_playbook(dir.path(), "broken");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn accepts_valid_playbook() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("valid.toml");
+        std::fs::write(&path, r#"
+name = "test"
+description = "test"
+
+[[steps]]
+id = "step1"
+description = "first"
+required_role = "Dev"
+next = "step2"
+
+[[steps]]
+id = "step2"
+description = "second"
+required_role = "Dev"
+"#).unwrap();
+        let result = load_playbook(dir.path(), "valid");
+        assert!(result.is_ok());
     }
 
     #[test]
