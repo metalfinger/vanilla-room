@@ -20,6 +20,8 @@ use crate::types::*;
 
 const MAX_CONSECUTIVE: u32 = 1;
 const TRANSCRIPT_WINDOW: usize = 30;
+const MAX_TURNS: u32 = 100;
+const MAX_RETRIES: u32 = 3;
 
 // ---------------------------------------------------------------------------
 // TurnResult
@@ -228,16 +230,10 @@ impl Conductor {
                 // Try loading persona from disk
                 match persona::load_persona(&self.personas_dir, agent_name) {
                     Ok(a) => a,
-                    Err(e) => {
-                        // If agent not found, skip this step and advance
-                        let msg = format!(
-                            "Skipping step — agent '{}' not on team. Advancing.",
-                            agent_name
-                        );
-                        self.post_conductor_message(&msg)?;
-                        if let Some(ref step_id) = self.state.data.current_step_id.clone() {
-                            self.advance_step(step_id)?;
-                        }
+                    Err(_e) => {
+                        // Unknown agent — log warning but DON'T advance the step
+                        eprintln!("[Conductor] Warning: agent '{}' not found. Skipping turn.", agent_name);
+                        self.turn_count -= 1; // Don't count failed lookup as a turn
                         return Ok(TurnResult::Continue);
                     }
                 }
@@ -294,16 +290,25 @@ impl Conductor {
         self.git.ensure_agent_branch(&agent.name)?;
         self.git.checkout_agent_branch(&agent.name)?;
 
-        // 6. Execute agent turn
-        let response = match self.executor.execute_turn(&agent, &system_prompt, &user_prompt) {
-            Ok(r) => r,
-            Err(e) => {
-                return Ok(TurnResult::Error(format!(
-                    "Agent '{}' execution failed: {}",
-                    agent.name, e
-                )));
+        // 8. Execute agent turn with retry
+        let mut response = None;
+        for attempt in 0..=MAX_RETRIES {
+            match self.executor.execute_turn(&agent, &system_prompt, &user_prompt) {
+                Ok(r) => { response = Some(r); break; }
+                Err(e) if attempt < MAX_RETRIES => {
+                    let wait_secs = 2u64.pow(attempt);
+                    eprintln!("[Conductor] Agent '{}' failed (attempt {}): {}. Retrying in {}s...",
+                        agent.name, attempt + 1, e, wait_secs);
+                    std::thread::sleep(std::time::Duration::from_secs(wait_secs));
+                }
+                Err(e) => {
+                    return Ok(TurnResult::Error(format!(
+                        "Agent '{}' failed after {} retries: {}", agent.name, MAX_RETRIES, e
+                    )));
+                }
             }
-        };
+        }
+        let response = response.unwrap();
 
         // 7. Commit any changes on agent branch
         let commit_msg = format!("{}: turn {}", agent.name, self.turn_count);
@@ -360,8 +365,20 @@ impl Conductor {
 
         self.last_speaker = Some(agent.name.clone());
 
-        // 11. Check for rejection -> start reflexion
-        if parsed.status == Some(Vote::Rejected) {
+        // Check for blocking votes
+        if self.state.is_blocked() {
+            let blockers: Vec<String> = self.state.data.approvals.iter()
+                .filter(|(_, v)| **v == Vote::Blocking)
+                .map(|(k, _)| k.clone())
+                .collect();
+            self.post_conductor_message(&format!(
+                "Blocked by: {}. Resolve before advancing.", blockers.join(", ")
+            ))?;
+            return if self.paused { Ok(TurnResult::Paused) } else { Ok(TurnResult::Continue) };
+        }
+
+        // 11. Check for rejection -> start reflexion (only if not already in one)
+        if parsed.status == Some(Vote::Rejected) && !self.reflexion_active {
             self.start_reflexion(&agent.name)?;
         }
 
@@ -407,9 +424,16 @@ impl Conductor {
     /// Main orchestration loop.
     pub fn run(&mut self) -> io::Result<TurnResult> {
         self.post_conductor_message("Room started. Let's begin.")?;
+        self.run_loop()
+    }
 
+    fn run_loop(&mut self) -> io::Result<TurnResult> {
         loop {
             if self.paused {
+                return Ok(TurnResult::Paused);
+            }
+            if self.turn_count >= MAX_TURNS {
+                self.post_conductor_message("Turn limit reached. Pausing for user review.")?;
                 return Ok(TurnResult::Paused);
             }
 
@@ -501,7 +525,8 @@ impl Conductor {
     /// Resume the room and continue the main loop.
     pub fn resume(&mut self) -> io::Result<TurnResult> {
         self.paused = false;
-        self.run()
+        self.post_conductor_message("Room resumed.")?;
+        self.run_loop()
     }
 
     // -----------------------------------------------------------------------
