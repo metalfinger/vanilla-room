@@ -31,11 +31,31 @@ impl Discussion {
     pub fn append(&self, entry: &DiscussionEntry) -> io::Result<()> {
         let line = serde_json::to_string(entry)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let lock_path = self.path.with_extension("jsonl.lock");
+
+        // Simple lock file with retry
+        let mut acquired = false;
+        for _ in 0..20 {
+            match OpenOptions::new().write(true).create_new(true).open(&lock_path) {
+                Ok(_) => { acquired = true; break; }
+                Err(_) => {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            }
+        }
+
+        // Write the entry (with or without lock)
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.path)?;
         writeln!(file, "{}", line)?;
+
+        // Release lock
+        if acquired {
+            let _ = std::fs::remove_file(&lock_path);
+        }
+
         Ok(())
     }
 
@@ -54,14 +74,13 @@ impl Discussion {
             if trimmed.is_empty() {
                 continue;
             }
-            let entry: DiscussionEntry =
-                serde_json::from_str(trimmed).map_err(|e| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("line {}: {}", lineno + 1, e),
-                    )
-                })?;
-            entries.push(entry);
+            match serde_json::from_str::<DiscussionEntry>(trimmed) {
+                Ok(entry) => entries.push(entry),
+                Err(e) => {
+                    eprintln!("Warning: skipping corrupt discussion line {}: {}", lineno + 1, e);
+                    continue;
+                }
+            }
         }
         Ok(entries)
     }
