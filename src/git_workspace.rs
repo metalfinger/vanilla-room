@@ -86,20 +86,22 @@ impl GitWorkspace {
         Ok(())
     }
 
+    /// Remove .vanilla-room/ from git tracking on current branch.
+    /// Call once before any branch operations to ensure runtime files
+    /// don't cause checkout conflicts.
+    pub fn untrack_runtime_files(&self) {
+        let _ = run_git(&self.repo_dir, &["rm", "-r", "--cached", "--quiet", "--ignore-unmatch", ".vanilla-room"]);
+        // Commit the untracking silently
+        let status = run_git(&self.repo_dir, &["status", "--porcelain"]).unwrap_or_default();
+        if !status.is_empty() {
+            let _ = run_git(&self.repo_dir, &["add", ".gitignore"]);
+            let _ = run_git(&self.repo_dir, &["commit", "-m", "chore: untrack .vanilla-room/ runtime files", "--allow-empty"]);
+        }
+    }
+
     pub fn checkout_agent_branch(&self, agent_name: &str) -> io::Result<()> {
         let branch = Self::agent_branch_name(agent_name);
-        // Stash any dirty files (runtime state files) before switching
-        let status = run_git(&self.repo_dir, &["status", "--porcelain"]).unwrap_or_default();
-        let stashed = if !status.is_empty() {
-            let _ = run_git(&self.repo_dir, &["stash", "push", "-m", "vr-auto-stash"]);
-            true
-        } else {
-            false
-        };
         run_git(&self.repo_dir, &["checkout", &branch])?;
-        if stashed {
-            let _ = run_git(&self.repo_dir, &["stash", "pop"]);
-        }
         Ok(())
     }
 
@@ -125,16 +127,9 @@ impl GitWorkspace {
     }
 
     fn force_checkout(&self, branch: &str) -> io::Result<()> {
-        let status = run_git(&self.repo_dir, &["status", "--porcelain"]).unwrap_or_default();
-        if !status.is_empty() {
-            let _ = run_git(&self.repo_dir, &["stash", "push", "-m", "vr-auto-stash"]);
-        }
+        // Reset any dirty index state (merge conflicts, etc.)
+        let _ = run_git(&self.repo_dir, &["reset", "--hard"]);
         run_git(&self.repo_dir, &["checkout", branch])?;
-        // Pop stash if it exists
-        let stash_list = run_git(&self.repo_dir, &["stash", "list"]).unwrap_or_default();
-        if stash_list.contains("vr-auto-stash") {
-            let _ = run_git(&self.repo_dir, &["stash", "pop"]);
-        }
         Ok(())
     }
 
