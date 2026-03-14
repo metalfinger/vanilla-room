@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use crate::types::{DiscussionEntry, Vote};
 
 // Maximum content length before truncation in format_for_prompt
-const MAX_CONTENT_LEN: usize = 200;
+const MAX_CONTENT_LEN: usize = 4000;
 
 // ---------------------------------------------------------------------------
 // Discussion
@@ -202,11 +202,13 @@ mod tests {
 
     #[test]
     fn test_truncation() {
-        let long_content = "a".repeat(300);
+        let long_content = "a".repeat(5000);
         let entry = make_entry("Agent", "role", &long_content, None);
         let prompt = Discussion::format_for_prompt(&[entry]);
-        // Should contain the ellipsis character and not the full 300 chars of 'a'
+        // Should contain the ellipsis character and not the full 5000 chars of 'a'
         assert!(prompt.contains('…'));
-        assert!(!prompt.contains(&"a".repeat(300)));
+        assert!(!prompt.contains(&"a".repeat(5000)));
+        // But should preserve up to 4000 chars
+        assert!(prompt.contains(&"a".repeat(4000)));
     }
 }

@@ -317,9 +317,13 @@ impl Conductor {
             self.start_reflexion(&agent.name)?;
         }
 
-        // Handle approval during reflexion
+        // Handle approval during reflexion — only the rejector can resolve it
         if self.reflexion_active && parsed.status == Some(Vote::Approved) {
-            self.end_reflexion()?;
+            if let Some((_, ref rejector)) = self.reflexion_pair {
+                if rejector == agent_name {
+                    self.end_reflexion()?;
+                }
+            }
         }
 
         // Increment reflexion rounds if active
@@ -525,7 +529,20 @@ impl Conductor {
 
         let gate = match step.gate.as_deref() {
             Some(g) => g,
-            None => return Ok(None), // No gate, no advancement check
+            None => {
+                // No gate — auto-advance when the required artifact is produced
+                // or when the assigned role has taken their turn
+                if let Some(ref artifact) = step.output_artifact {
+                    if self.state.data.artifacts.contains_key(artifact) {
+                        return self.advance_step(&step_id);
+                    }
+                } else {
+                    // No gate and no artifact requirement — advance after the
+                    // required role has spoken (current turn just completed)
+                    return self.advance_step(&step_id);
+                }
+                return Ok(None);
+            }
         };
 
         match gate {

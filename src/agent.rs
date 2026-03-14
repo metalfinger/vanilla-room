@@ -146,12 +146,13 @@ impl AgentExecutor {
 
 /// Waits for a child process and kills it if it exceeds `timeout`.
 fn wait_with_timeout(
-    child: std::process::Child,
+    mut child: std::process::Child,
     timeout: Duration,
 ) -> Result<std::process::Output, AgentError> {
     use std::sync::mpsc;
     use std::thread;
 
+    let pid = child.id();
     let (tx, rx) = mpsc::channel();
 
     // Spawn a thread that blocks on wait_with_output.
@@ -164,9 +165,21 @@ fn wait_with_timeout(
         Ok(Ok(output)) => Ok(output),
         Ok(Err(e)) => Err(AgentError::Io(e)),
         Err(_) => {
-            // Timeout — the child thread still owns the process handle so we
-            // cannot kill it here, but the process will be orphaned briefly
-            // before the OS reclaims it. In practice the thread will clean up.
+            // Timeout — kill the process tree. On Windows use taskkill,
+            // on Unix use kill. The thread still owns the handle but the
+            // process itself will be terminated.
+            #[cfg(windows)]
+            {
+                let _ = Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                    .output();
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = Command::new("kill")
+                    .args(["-9", &pid.to_string()])
+                    .output();
+            }
             Err(AgentError::Timeout)
         }
     }

@@ -1,5 +1,6 @@
+use std::io::Write;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use serde::{Deserialize, Serialize};
 
@@ -101,11 +102,23 @@ Pick the optimal team and playbook. Consider:
 Respond ONLY with JSON, no markdown fences: {{"agents": [...], "playbook": "...", "reasoning": "..."}}"#
     );
 
-    let output = Command::new("claude")
-        .args(["--print", "--output-format", "text", "-p", &prompt])
-        .output();
+    let child = Command::new("claude")
+        .args(["--print", "--output-format", "text", "-p", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
 
-    let raw = match output {
+    let mut child = match child {
+        Ok(c) => c,
+        Err(_) => return default_plan(),
+    };
+
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(prompt.as_bytes());
+    }
+
+    let raw = match child.wait_with_output() {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).into_owned(),
         _ => return default_plan(),
     };

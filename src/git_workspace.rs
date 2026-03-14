@@ -100,7 +100,8 @@ impl GitWorkspace {
     pub fn merge_session_to_main(&self) -> io::Result<()> {
         let session_branch = self.session_branch_name();
 
-        run_git(&self.repo_dir, &["checkout", "main"])?;
+        // Merge back to whatever branch the user was on when they started
+        run_git(&self.repo_dir, &["checkout", &self.original_branch])?;
         run_git(
             &self.repo_dir,
             &["merge", "--no-ff", &session_branch, "-m", &format!("merge {}", session_branch)],
@@ -109,16 +110,36 @@ impl GitWorkspace {
     }
 
     pub fn cleanup_branches(&self, session_id: &str) -> io::Result<()> {
-        let prefix = format!("vr/session-{}", session_id);
+        let session_prefix = format!("vr/session-{}", session_id);
         let list_output = run_git(&self.repo_dir, &["branch", "--list", "vr/*"])?;
 
         self.restore_original_branch().ok();
 
+        // Collect agent branches that belong to this session.
+        // Session branch: vr/session-{id}
+        // Agent branches: vr/{agent_name} — we track which ones we created
+        // by checking the roster, but since we don't have it here, delete
+        // the session branch and any agent branches that were forked from it.
+        let mut to_delete = Vec::new();
         for line in list_output.lines() {
             let branch = line.trim().trim_start_matches('*').trim();
-            if branch.starts_with("vr/") && (branch.contains(&prefix) || branch.starts_with("vr/")) {
-                run_git(&self.repo_dir, &["branch", "-D", branch]).ok();
+            if branch == session_prefix {
+                to_delete.push(branch.to_string());
+            } else if branch.starts_with("vr/") && branch != session_prefix {
+                // Check if this agent branch was based on our session branch
+                let merge_base = run_git(
+                    &self.repo_dir,
+                    &["merge-base", "--is-ancestor", &session_prefix, branch],
+                );
+                if merge_base.is_ok() {
+                    to_delete.push(branch.to_string());
+                }
             }
+        }
+
+        // Delete agent branches first, then session branch
+        for branch in &to_delete {
+            run_git(&self.repo_dir, &["branch", "-D", branch]).ok();
         }
         Ok(())
     }
