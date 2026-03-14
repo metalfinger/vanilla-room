@@ -90,7 +90,7 @@ impl Conductor {
 
         let queue: VecDeque<String> = roster.0.iter().map(|a| a.name.clone()).collect();
 
-        Ok(Self {
+        let mut conductor = Self {
             config,
             roster,
             playbook,
@@ -109,7 +109,9 @@ impl Conductor {
             personas_dir,
             playbooks_dir,
             last_speaker: None,
-        })
+        };
+        conductor.load_conductor_state();
+        Ok(conductor)
     }
 
     // -----------------------------------------------------------------------
@@ -364,6 +366,7 @@ impl Conductor {
         }
 
         self.last_speaker = Some(agent.name.clone());
+        self.save_conductor_state()?;
 
         // Check for blocking votes
         if self.state.is_blocked() {
@@ -659,6 +662,44 @@ impl Conductor {
         else if id.contains("final") || id.contains("merge") { Phase::Finalizing }
         else if id.contains("research") || id.contains("analyz") || id.contains("investigat") { Phase::Brainstorming }
         else { self.state.data.phase.clone() }
+    }
+
+    // -----------------------------------------------------------------------
+    // State persistence
+    // -----------------------------------------------------------------------
+
+    fn conductor_state_path(&self) -> PathBuf {
+        self.config.project_dir.join(".vanilla-room/conductor_state.json")
+    }
+
+    fn save_conductor_state(&self) -> io::Result<()> {
+        let cs = ConductorState {
+            queue: self.queue.iter().cloned().collect(),
+            pending_handoffs: self.pending_handoffs.clone(),
+            reflexion_active: self.reflexion_active,
+            reflexion_pair: self.reflexion_pair.clone(),
+            reflexion_rounds: self.reflexion_rounds,
+            turn_count: self.turn_count,
+            last_speaker: self.last_speaker.clone(),
+        };
+        let json = serde_json::to_string_pretty(&cs)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        std::fs::write(self.conductor_state_path(), json)
+    }
+
+    fn load_conductor_state(&mut self) {
+        let path = self.conductor_state_path();
+        if let Ok(contents) = std::fs::read_to_string(&path) {
+            if let Ok(cs) = serde_json::from_str::<ConductorState>(&contents) {
+                self.queue = cs.queue.into_iter().collect();
+                self.pending_handoffs = cs.pending_handoffs;
+                self.reflexion_active = cs.reflexion_active;
+                self.reflexion_pair = cs.reflexion_pair;
+                self.reflexion_rounds = cs.reflexion_rounds;
+                self.turn_count = cs.turn_count;
+                self.last_speaker = cs.last_speaker;
+            }
+        }
     }
 
     fn advance_step(&mut self, current_step_id: &str) -> io::Result<Option<TurnResult>> {

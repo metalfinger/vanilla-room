@@ -164,3 +164,18 @@ pub struct RoomConfig {
     pub repo_dir: PathBuf,
     pub session_id: String,
 }
+
+// ---------------------------------------------------------------------------
+// ConductorState
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConductorState {
+    pub queue: Vec<String>,
+    pub pending_handoffs: Vec<String>,
+    pub reflexion_active: bool,
+    pub reflexion_pair: Option<(String, String)>,
+    pub reflexion_rounds: u32,
+    pub turn_count: u32,
+    pub last_speaker: Option<String>,
+}
