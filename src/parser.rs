@@ -1,5 +1,56 @@
 use crate::types::{ParsedResponse, Vote};
 
+/// Remove fenced code blocks (``` ... ```) and inline code (` ... `) from `raw`,
+/// replacing them with empty strings so that tags inside code are not parsed.
+fn strip_code_blocks(raw: &str) -> String {
+    let mut result = String::with_capacity(raw.len());
+    let mut i = 0;
+    let bytes = raw.as_bytes();
+    let len = bytes.len();
+
+    while i < len {
+        // Check for triple backtick fence
+        if bytes[i] == b'`'
+            && i + 2 < len
+            && bytes[i + 1] == b'`'
+            && bytes[i + 2] == b'`'
+        {
+            // Skip opening fence (```) and everything until closing ```
+            i += 3;
+            loop {
+                if i + 2 < len
+                    && bytes[i] == b'`'
+                    && bytes[i + 1] == b'`'
+                    && bytes[i + 2] == b'`'
+                {
+                    i += 3;
+                    break;
+                }
+                if i >= len {
+                    break;
+                }
+                i += 1;
+            }
+        } else if bytes[i] == b'`' {
+            // Inline code: skip until the matching closing backtick
+            i += 1;
+            while i < len && bytes[i] != b'`' {
+                i += 1;
+            }
+            if i < len {
+                i += 1; // consume closing backtick
+            }
+        } else {
+            // Safe to push: advance by one UTF-8 char, not one byte
+            let ch = raw[i..].chars().next().unwrap();
+            result.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+
+    result
+}
+
 /// Extract all `[TAG: value]` occurrences from `raw` where `tag` matches (case-insensitive).
 /// Returns an iterator of trimmed value strings.
 fn extract_tag_values<'a>(raw: &'a str, tag: &str) -> Vec<String> {
@@ -43,14 +94,16 @@ fn parse_vote(s: &str) -> Option<Vote> {
 
 /// Parse structured tags from an agent natural-language response.
 pub fn parse_response(raw: &str) -> ParsedResponse {
+    let clean = strip_code_blocks(raw);
+
     // STATUS — use last occurrence if multiple (most recent wins)
-    let status = extract_tag_values(raw, "STATUS")
+    let status = extract_tag_values(&clean, "STATUS")
         .into_iter()
         .filter_map(|v| parse_vote(&v))
         .last();
 
     // HANDOFF — split comma-separated targets, trim whitespace
-    let handoff_targets = extract_tag_values(raw, "HANDOFF")
+    let handoff_targets = extract_tag_values(&clean, "HANDOFF")
         .into_iter()
         .flat_map(|v| {
             v.split(',')
@@ -60,10 +113,10 @@ pub fn parse_response(raw: &str) -> ParsedResponse {
         })
         .collect();
 
-    let decisions = extract_tag_values(raw, "DECISION");
-    let artifacts = extract_tag_values(raw, "ARTIFACT");
-    let recruit_requests = extract_tag_values(raw, "RECRUIT");
-    let deboard_requests = extract_tag_values(raw, "DEBOARD");
+    let decisions = extract_tag_values(&clean, "DECISION");
+    let artifacts = extract_tag_values(&clean, "ARTIFACT");
+    let recruit_requests = extract_tag_values(&clean, "RECRUIT");
+    let deboard_requests = extract_tag_values(&clean, "DEBOARD");
 
     ParsedResponse {
         raw_content: raw.to_string(),
@@ -222,5 +275,27 @@ mod tests {
     fn unknown_status_value_is_none() {
         let r = parse_response("[STATUS: UNKNOWN_VALUE]");
         assert_eq!(r.status, None);
+    }
+
+    #[test]
+    fn tags_inside_code_block_ignored() {
+        let raw = "Here's an example:\n```\n[STATUS: APPROVED]\n```\nI'm still reviewing. [STATUS: DISCUSSING]";
+        let r = parse_response(raw);
+        assert_eq!(r.status, Some(Vote::Discussing));
+    }
+
+    #[test]
+    fn tags_inside_inline_code_ignored() {
+        let raw = "Use `[HANDOFF: Developer]` to pass control. [STATUS: APPROVED]";
+        let r = parse_response(raw);
+        assert!(r.handoff_targets.is_empty());
+        assert_eq!(r.status, Some(Vote::Approved));
+    }
+
+    #[test]
+    fn tags_inside_fenced_with_lang_ignored() {
+        let raw = "```json\n{\"status\": \"[STATUS: REJECTED]\"}\n```\n[STATUS: APPROVED]";
+        let r = parse_response(raw);
+        assert_eq!(r.status, Some(Vote::Approved));
     }
 }
