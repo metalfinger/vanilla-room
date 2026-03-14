@@ -259,7 +259,26 @@ impl Conductor {
             "No brief provided.".to_string()
         });
 
-        // 4. Build prompts
+        // 4. Get diff for review context
+        let diff = self.git.get_diff(&agent.name);
+        let diff_ref = if diff.is_empty() { None } else { Some(diff.as_str()) };
+
+        // 5. Build step instruction
+        let step_instruction = self.state.data.current_step_id.as_ref().and_then(|sid| {
+            pb::current_step(&self.playbook, sid).map(|step| {
+                let lead = if step.required_role == agent.name || step.required_role == "ALL" {
+                    "You are the lead for this step. Do the work described above."
+                } else {
+                    "Contribute your perspective on this step."
+                };
+                format!(
+                    "Current step: {} — {}\nYou are {} ({}). {}",
+                    step.id, step.description, agent.name, agent.role, lead
+                )
+            })
+        });
+
+        // 6. Build prompts
         let (system_prompt, user_prompt) = context::build_full_prompt(
             &agent,
             &brief,
@@ -267,12 +286,13 @@ impl Conductor {
             &self.state.data,
             &self.playbook,
             &self.state.data.decision_log,
-            None,
-            None,
+            diff_ref,
+            step_instruction.as_deref(),
         );
 
-        // 5. Checkout agent branch
-        let _ = self.git.checkout_agent_branch(&agent.name);
+        // 7. Ensure agent branch exists and checkout
+        self.git.ensure_agent_branch(&agent.name)?;
+        self.git.checkout_agent_branch(&agent.name)?;
 
         // 6. Execute agent turn
         let response = match self.executor.execute_turn(&agent, &system_prompt, &user_prompt) {
@@ -605,7 +625,36 @@ impl Conductor {
         Ok(None)
     }
 
+    fn phase_for_step(&self, step_id: &str) -> Phase {
+        let id = step_id.to_lowercase();
+        if id.contains("design") || id.contains("brainstorm") { Phase::Designing }
+        else if id.contains("implement") || id.contains("fix") || id.contains("refactor") { Phase::Implementing }
+        else if id.contains("test") { Phase::Testing }
+        else if id.contains("review") { Phase::Reviewing }
+        else if id.contains("final") || id.contains("merge") { Phase::Finalizing }
+        else if id.contains("research") || id.contains("analyz") || id.contains("investigat") { Phase::Brainstorming }
+        else { self.state.data.phase.clone() }
+    }
+
     fn advance_step(&mut self, current_step_id: &str) -> io::Result<Option<TurnResult>> {
+        // Merge the lead agent's branch if this step produced work
+        if let Some(step) = pb::current_step(&self.playbook, current_step_id) {
+            let role = &step.required_role;
+            if role != "ALL" && role.to_lowercase() != "conductor" {
+                if let Some(lead) = self.roster.0.iter().find(|a| {
+                    a.name == *role || a.role.to_lowercase().contains(&role.to_lowercase())
+                }) {
+                    let name = lead.name.clone();
+                    self.post_conductor_message(&format!("Merging {}'s work to session branch.", name))?;
+                    if let Err(e) = self.git.merge_agent_to_session(&name) {
+                        self.post_conductor_message(&format!("Merge conflict from {}: {}. Pausing.", name, e))?;
+                        self.paused = true;
+                        return Ok(Some(TurnResult::Paused));
+                    }
+                }
+            }
+        }
+
         let next = pb::next_step(&self.playbook, current_step_id);
 
         match next {
@@ -614,6 +663,7 @@ impl Conductor {
                 let next_desc = next_step.description.clone();
 
                 self.state.data.current_step_id = Some(next_id.clone());
+                self.state.data.phase = self.phase_for_step(&next_id);
                 // Reset approvals for new step
                 for vote in self.state.data.approvals.values_mut() {
                     *vote = Vote::Pending;
