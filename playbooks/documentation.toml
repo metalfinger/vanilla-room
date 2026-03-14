@@ -1,0 +1,29 @@
+name = "documentation"
+description = "Write or update project documentation to reflect current behavior"
+
+[[steps]]
+id = "outline"
+description = "Define the scope, audience, and structure of the documentation to be written"
+required_role = "Architect"
+output_artifact = "doc_outline.md"
+next = "write"
+
+[[steps]]
+id = "write"
+description = "Author the full documentation draft covering all outlined sections"
+required_role = "Developer"
+output_artifact = "doc_draft.md"
+next = "review"
+
+[[steps]]
+id = "review"
+description = "Review the draft for accuracy, completeness, and clarity"
+required_role = "Reviewer"
+output_artifact = "review_notes.md"
+next = "finalize"
+
+[[steps]]
+id = "finalize"
+description = "Apply review feedback, publish the final document, and update any index pages"
+required_role = "Conductor"
+output_artifact = "final_doc.md"

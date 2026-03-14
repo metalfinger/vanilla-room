@@ -1,0 +1,29 @@
+name = "investigation"
+description = "Research an open question or unknown and produce a clear recommendation"
+
+[[steps]]
+id = "research"
+description = "Gather information from code, docs, logs, and external sources relevant to the question"
+required_role = "Architect"
+output_artifact = "research_notes.md"
+next = "analyze"
+
+[[steps]]
+id = "analyze"
+description = "Synthesize findings into trade-offs, risks, and a ranked list of options"
+required_role = "Architect"
+output_artifact = "analysis.md"
+next = "report"
+
+[[steps]]
+id = "report"
+description = "Write a concise recommendation report with supporting evidence"
+required_role = "Architect"
+output_artifact = "recommendation.md"
+next = "consensus"
+
+[[steps]]
+id = "consensus"
+description = "All agents review the recommendation and reach unanimous agreement before proceeding"
+required_role = "ALL"
+gate = "unanimous_approval"

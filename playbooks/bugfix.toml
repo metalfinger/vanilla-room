@@ -1,0 +1,43 @@
+name = "bugfix"
+description = "Diagnose and resolve a reported bug"
+
+[[steps]]
+id = "investigate"
+description = "Understand the bug report, gather logs, and identify the affected code paths"
+required_role = "Architect"
+output_artifact = "investigation.md"
+next = "reproduce"
+
+[[steps]]
+id = "reproduce"
+description = "Write a failing test or minimal reproduction case that confirms the bug"
+required_role = "Tester"
+output_artifact = "repro_test.rs"
+next = "fix"
+
+[[steps]]
+id = "fix"
+description = "Implement the fix on a dedicated branch without breaking existing behavior"
+required_role = "Developer"
+output_artifact = "fix_diff"
+next = "test"
+
+[[steps]]
+id = "test"
+description = "Run the reproduction test and full test suite to confirm the fix holds"
+required_role = "Tester"
+output_artifact = "test_report.md"
+next = "review"
+
+[[steps]]
+id = "review"
+description = "Review the fix for correctness, side-effects, and regression risk"
+required_role = "Reviewer"
+output_artifact = "review_notes.md"
+next = "finalize"
+
+[[steps]]
+id = "finalize"
+description = "Merge the fix branch, update the changelog, and close the bug report"
+required_role = "Conductor"
+output_artifact = "changelog_entry.md"

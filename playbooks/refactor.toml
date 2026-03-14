@@ -1,0 +1,43 @@
+name = "refactor"
+description = "Improve internal code structure without changing external behavior"
+
+[[steps]]
+id = "analyze"
+description = "Identify code smells, duplication, and areas with high coupling or low cohesion"
+required_role = "Architect"
+output_artifact = "analysis.md"
+next = "plan"
+
+[[steps]]
+id = "plan"
+description = "Draft a refactor plan with clear before/after structure and risk assessment"
+required_role = "Architect"
+output_artifact = "refactor_plan.md"
+next = "implement"
+
+[[steps]]
+id = "implement"
+description = "Execute the refactor on a dedicated branch, keeping commits atomic and reversible"
+required_role = "Developer"
+output_artifact = "refactor_diff"
+next = "test"
+
+[[steps]]
+id = "test"
+description = "Run the full test suite to confirm no behavior has changed"
+required_role = "Tester"
+output_artifact = "test_report.md"
+next = "review"
+
+[[steps]]
+id = "review"
+description = "Review the refactored code for improved clarity and any introduced issues"
+required_role = "Reviewer"
+output_artifact = "review_notes.md"
+next = "finalize"
+
+[[steps]]
+id = "finalize"
+description = "Merge the refactor branch and update internal architecture notes"
+required_role = "Conductor"
+output_artifact = "architecture_update.md"

@@ -1,0 +1,43 @@
+name = "feature_development"
+description = "Build a new feature from scratch"
+
+[[steps]]
+id = "design"
+description = "Design the approach, architecture, and API surface for the feature"
+required_role = "Architect"
+output_artifact = "design.md"
+next = "consensus_design"
+
+[[steps]]
+id = "consensus_design"
+description = "All agents review and approve the design before implementation begins"
+required_role = "ALL"
+gate = "unanimous_approval"
+next = "implement"
+
+[[steps]]
+id = "implement"
+description = "Write the feature code on a dedicated git branch"
+required_role = "Developer"
+output_artifact = "implementation"
+next = "test"
+
+[[steps]]
+id = "test"
+description = "Write and run unit, integration, and edge-case tests for the feature"
+required_role = "Tester"
+output_artifact = "test_report.md"
+next = "review"
+
+[[steps]]
+id = "review"
+description = "Review the diff for correctness, style, and potential regressions"
+required_role = "Reviewer"
+output_artifact = "review_notes.md"
+next = "finalize"
+
+[[steps]]
+id = "finalize"
+description = "Merge the branch, update documentation, and mark the feature complete"
+required_role = "Conductor"
+output_artifact = "changelog_entry.md"
