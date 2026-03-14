@@ -34,12 +34,40 @@ impl GitWorkspace {
         })
     }
 
+    pub fn new_with_original(repo_dir: PathBuf, session_id: &str, original_branch: String) -> Self {
+        Self {
+            repo_dir,
+            session_id: session_id.to_string(),
+            original_branch,
+        }
+    }
+
     pub fn session_branch_name(&self) -> String {
         format!("vr/session-{}", self.session_id)
     }
 
     pub fn agent_branch_name(agent_name: &str) -> String {
         format!("vr/{}", agent_name.to_lowercase())
+    }
+
+    pub fn ensure_session_branch(&self) -> io::Result<()> {
+        let branch = self.session_branch_name();
+        let exists = run_git(&self.repo_dir, &["rev-parse", "--verify", &branch]);
+        if exists.is_err() {
+            run_git(&self.repo_dir, &["branch", &branch, &self.original_branch])?;
+        }
+        Ok(())
+    }
+
+    pub fn ensure_agent_branch(&self, agent_name: &str) -> io::Result<()> {
+        let branch = Self::agent_branch_name(agent_name);
+        let exists = run_git(&self.repo_dir, &["rev-parse", "--verify", &branch]);
+        if exists.is_err() {
+            let session = self.session_branch_name();
+            // Create branch without checking out (so we don't disturb current checkout)
+            run_git(&self.repo_dir, &["branch", &branch, &session])?;
+        }
+        Ok(())
     }
 
     pub fn create_session_branch(&self) -> io::Result<()> {
@@ -88,24 +116,29 @@ impl GitWorkspace {
     pub fn merge_agent_to_session(&self, agent_name: &str) -> io::Result<()> {
         let session_branch = self.session_branch_name();
         let agent_branch = Self::agent_branch_name(agent_name);
-
         run_git(&self.repo_dir, &["checkout", &session_branch])?;
-        run_git(
+        let result = run_git(
             &self.repo_dir,
             &["merge", "--no-ff", &agent_branch, "-m", &format!("merge {}", agent_branch)],
-        )?;
+        );
+        if let Err(e) = result {
+            let _ = run_git(&self.repo_dir, &["merge", "--abort"]);
+            return Err(e);
+        }
         Ok(())
     }
 
     pub fn merge_session_to_main(&self) -> io::Result<()> {
         let session_branch = self.session_branch_name();
-
-        // Merge back to whatever branch the user was on when they started
         run_git(&self.repo_dir, &["checkout", &self.original_branch])?;
-        run_git(
+        let result = run_git(
             &self.repo_dir,
             &["merge", "--no-ff", &session_branch, "-m", &format!("merge {}", session_branch)],
-        )?;
+        );
+        if let Err(e) = result {
+            let _ = run_git(&self.repo_dir, &["merge", "--abort"]);
+            return Err(e);
+        }
         Ok(())
     }
 
